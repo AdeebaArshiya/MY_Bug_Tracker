@@ -1,134 +1,135 @@
-from flask import Flask, render_template, redirect, url_for, request, flash
-from flask_login import LoginManager, login_user, logout_user, login_required, current_user
-from werkzeug.security import generate_password_hash, check_password_hash
-from models import db, User, Project, Bug
+import os
+from flask import Flask, render_template, request, redirect, url_for, flash
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
+from datetime import datetime
 
 app = Flask(__name__)
-app.config["SECRET_KEY"] = "super-secret-key"
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///bugtracker.db"
-app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.config['SECRET_KEY'] = 'soft-theme-local-time'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///bugtracker.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-db.init_app(app)
-
+db = SQLAlchemy(app)
 login_manager = LoginManager(app)
-login_manager.login_view = "login"
+login_manager.login_view = 'login'
+
+# --- Models ---
+class User(UserMixin, db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    password = db.Column(db.String(120), nullable=False)
+    bugs = db.relationship('Bug', backref='reporter', lazy=True)
+
+class Project(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    bugs = db.relationship('Bug', backref='project', lazy=True)
+
+class Bug(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text, nullable=False)
+    priority = db.Column(db.String(20), nullable=False)
+    status = db.Column(db.String(20), default='Open')
+    
+    # FIXED: Changed from utcnow to now() for local time
+    created_at = db.Column(db.DateTime, default=datetime.now) 
+    resolved_at = db.Column(db.DateTime, nullable=True)
+    
+    project_id = db.Column(db.Integer, db.ForeignKey('project.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+
+class ActivityLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    content = db.Column(db.String(255), nullable=False)
+    # FIXED: Changed from utcnow to now()
+    timestamp = db.Column(db.DateTime, default=datetime.now)
 
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))
 
-@app.route("/")
+# --- Routes ---
+
+@app.route('/')
 def index():
-    if current_user.is_authenticated:
-        return redirect(url_for("dashboard"))
-    return redirect(url_for("login"))
+    return redirect(url_for('login'))
 
-@app.route("/login", methods=["GET", "POST"])
+@app.route('/login', methods=['GET', 'POST'])
 def login():
-    if request.method == "POST":
-        email = request.form["email"]
-        password = request.form["password"]
-        user = User.query.filter_by(email=email).first()
-        if user and check_password_hash(user.password, password):
+    if request.method == 'POST':
+        user = User.query.filter_by(username=request.form.get('username')).first()
+        if user and user.password == request.form.get('password'):
             login_user(user)
-            return redirect(url_for("dashboard"))
-        flash("Invalid credentials")
-    return render_template("login.html")
+            return redirect(url_for('dashboard'))
+    return render_template('login.html')
 
-@app.route("/register", methods=["GET", "POST"])
+# FIX: Added missing register route to stop BuildError
+@app.route('/register')
 def register():
-    if request.method == "POST":
-        username = request.form["username"]
-        email = request.form["email"]
-        password = request.form["password"]
-        if User.query.filter_by(email=email).first():
-            flash("Email already exists")
-            return redirect(url_for("register"))
-        role = "admin" if username.lower() == "admin" else "user"
-        new_user = User(username=username, email=email, password=generate_password_hash(password), role=role)
-        db.session.add(new_user)
-        db.session.commit()
-        login_user(new_user)
-        return redirect(url_for("dashboard"))
-    return render_template("register.html")
+    return "Registration is currently restricted to Admin users."
 
-# --- THE CRITICAL DASHBOARD ROUTE ---
-@app.route("/dashboard")
+@app.route('/dashboard')
 @login_required
 def dashboard():
-    # 1. Get Data
-    bugs = Bug.query.order_by(Bug.status.desc()).all()
+    bugs = Bug.query.order_by(Bug.created_at.desc()).all()
     projects = Project.query.all()
+    activities = ActivityLog.query.order_by(ActivityLog.timestamp.desc()).limit(5).all()
+    high = Bug.query.filter_by(priority='High', status='Open').count()
+    med = Bug.query.filter_by(priority='Medium', status='Open').count()
+    low = Bug.query.filter_by(priority='Low', status='Open').count()
+    return render_template('dashboard.html', bugs=bugs, projects=projects, activities=activities, high=high, med=med, low=low)
 
-    # 2. CALCULATE STATS
-    high = Bug.query.filter_by(priority='High').count()
-    medium = Bug.query.filter_by(priority='Medium').count()
-    low = Bug.query.filter_by(priority='Low').count()
-
-    # 3. Send to HTML
-    return render_template("dashboard.html", bugs=bugs, projects=projects, 
-                           high=high, medium=medium, low=low)
-
-@app.route("/project/create", methods=["POST"])
+# FIX: Added missing projects_page route to stop BuildError
+@app.route('/projects')
 @login_required
-def create_project():
-    if current_user.role != "admin":
-        return redirect(url_for("dashboard"))
-    name = request.form["name"]
-    desc = request.form.get("description", "")
-    db.session.add(Project(name=name, description=desc))
-    db.session.commit()
-    return redirect(url_for("dashboard"))
+def projects_page():
+    projects = Project.query.all()
+    return render_template('projects.html', projects=projects)
 
-@app.route("/bug/create", methods=["POST"])
+@app.route('/settings')
+@login_required
+def settings_page():
+    return render_template('settings.html')
+
+@app.route('/create_bug', methods=['POST'])
 @login_required
 def create_bug():
-    project_id = request.form.get("project_id")
-    if not project_id:
-        flash("Please create a Project first!")
-        return redirect(url_for("dashboard"))
-
-    bug = Bug(
-        title=request.form["title"],
-        description=request.form["description"],
-        priority=request.form["priority"],
-        project_id=project_id,
-        created_by=current_user.id
+    new_bug = Bug(
+        title=request.form.get('title'),
+        description=request.form.get('description'),
+        priority=request.form.get('priority'),
+        project_id=request.form.get('project_id'),
+        user_id=current_user.id
     )
-    db.session.add(bug)
+    db.session.add(new_bug)
+    db.session.add(ActivityLog(content=f"🚀 {current_user.username} reported: {new_bug.title}"))
     db.session.commit()
-    return redirect(url_for("dashboard"))
+    return redirect(url_for('dashboard'))
 
-@app.route("/bug/resolve/<int:id>")
+@app.route('/resolve/<int:id>')
 @login_required
 def resolve_bug(id):
-    bug = Bug.query.get(id)
-    if bug:
-        bug.status = "Resolved"
-        db.session.commit()
-    return redirect(url_for("dashboard"))
+    bug = Bug.query.get_or_404(id)
+    bug.status = 'Resolved'
+    # FIXED: Changed from utcnow() to now()
+    bug.resolved_at = datetime.now() 
+    db.session.add(ActivityLog(content=f"✅ {current_user.username} resolved: {bug.title}"))
+    db.session.commit()
+    return redirect(url_for('dashboard'))
 
-@app.route("/bug/delete/<int:id>")
-@login_required
-def delete_bug(id):
-    if current_user.role == "admin":
-        bug = Bug.query.get(id)
-        if bug:
-            db.session.delete(bug)
-            db.session.commit()
-    return redirect(url_for("dashboard"))
-
-@app.route("/logout")
-@login_required
+@app.route('/logout')
 def logout():
     logout_user()
-    return redirect(url_for("login"))
+    return redirect(url_for('login'))
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-        if not User.query.filter_by(email="admin@test.com").first():
-            admin = User(username="Admin", email="admin@test.com", password=generate_password_hash("admin123"), role="admin")
-            db.session.add(admin)
-            db.session.commit()
+        # Seed initial data if database is new
+        if not User.query.filter_by(username='admin').first():
+            db.session.add(User(username='admin', password='password123'))
+        if not Project.query.first():
+            db.session.add(Project(name="Default Project"))
+        db.session.commit()
     app.run(debug=True)

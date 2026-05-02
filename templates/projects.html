@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+    <h3>All Projects</h3>
+    <ul>
+        {% for p in projects %}<li>{{ p.name }}</li>{% endfor %}
+    </ul>
+</div>
+{% endblock %}

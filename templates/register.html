@@ -1,13 +1,16 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="auth-box">
-    <h3>Register</h3>
+<div class="auth-card">
+    <h2>Create Account</h2>
     <form method="POST">
-      <input type="text" name="username" placeholder="Username (use 'Admin' for admin rights)" required>
-      <input type="email" name="email" placeholder="Email" required>
-      <input type="password" name="password" placeholder="Password" required>
-      <button>Sign Up</button>
+        <label>Username</label>
+        <input type="text" name="username" placeholder="Use 'Admin' for privileges" required>
+        <label>Email</label>
+        <input type="email" name="email" required>
+        <label>Password</label>
+        <input type="password" name="password" required>
+        <button type="submit" class="btn-success">Sign Up</button>
     </form>
-    <p>Have account? <a href="{{ url_for('login') }}">Login</a></p>
+    <p>Already registered? <a href="{{ url_for('login') }}">Login here</a></p>
 </div>
 {% endblock %}
